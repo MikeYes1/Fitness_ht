@@ -19,7 +19,8 @@ class UserProfile(BaseModel):
 async def create_user(user: UserProfile):
     user_dict = user.dict()
     result = await db.users.insert_one(user_dict)
-    return {"user_id": str(result.inserted_id)}
+    user_dict["_id"] = str(result.inserted_id)
+    return user_dict  # Return the whole user document (without BMI)
 
 @router.get("/{user_id}")
 async def get_user(user_id: str):
