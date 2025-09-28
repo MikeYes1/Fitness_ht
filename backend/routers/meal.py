@@ -25,8 +25,10 @@ def calculate_calories(weight_lb, height_in, age, gender, goal):
     bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age
     bmr += 5 if gender.lower() == "male" else -161
     tdee = bmr * 1.55
-    if goal.lower() == "lose weight": tdee -= 500
-    elif goal.lower() == "gain muscle": tdee += 300
+    if goal.lower() == "lose weight":
+        tdee -= 500
+    elif goal.lower() == "gain muscle":
+        tdee += 300
     macros = {
         "protein_g": round((0.3 * tdee) / 4),
         "carbs_g": round((0.4 * tdee) / 4),
@@ -49,35 +51,44 @@ async def generate_meal_plan(request: MealRequest):
     daily_calories, macros = calculate_calories(
         user["weight_lb"], user["height_in"], user["age"], user["gender"], user["goal"]
     )
-    diet_filter = map_diet(user["dietary_preferences"])
+    diet_filter = map_diet(user.get("dietary_preferences", ""))
 
-    params = {"number": 21, "addRecipeInformation": True, "apiKey": SPOONACULAR_API_KEY}
-    if diet_filter: params["diet"] = diet_filter
+    # Get 21 recipes (7 days × 3 meals)
+    params = {
+        "number": 21,
+        "addRecipeInformation": True,
+        "apiKey": SPOONACULAR_API_KEY
+    }
+    if diet_filter:
+        params["diet"] = diet_filter
 
     response = requests.get("https://api.spoonacular.com/recipes/complexSearch", params=params)
     if response.status_code != 200:
-        raise HTTPException(status_code=500, detail="Error fetching meal data")
+        raise HTTPException(status_code=500, detail=f"Error fetching meal data: {response.text}")
+    
     all_recipes = response.json().get("results", [])
+    if len(all_recipes) < 21:
+        raise HTTPException(status_code=500, detail="Not enough recipes returned by API")
 
+    # Build 7-day meal plan
     meal_plan = {}
     for day in range(7):
-        day_key = f"Day {day+1}"
+        day_key = f"Day {day + 1}"
         meals = {"breakfast": [], "lunch": [], "dinner": []}
-        for i in range(3):
+        for i, meal_type in enumerate(["breakfast", "lunch", "dinner"]):
             idx = day * 3 + i
-            if idx < len(all_recipes):
-                recipe = all_recipes[idx]
-                meal_type = ["breakfast", "lunch", "dinner"][i]
-                meals[meal_type].append({
-                    "title": recipe.get("title"),
-                    "readyInMinutes": recipe.get("readyInMinutes"),
-                    "servings": recipe.get("servings"),
-                    "sourceUrl": recipe.get("sourceUrl")
-                })
+            recipe = all_recipes[idx]
+            meals[meal_type].append({
+                "title": recipe.get("title"),
+                "readyInMinutes": recipe.get("readyInMinutes"),
+                "servings": recipe.get("servings"),
+                "sourceUrl": recipe.get("sourceUrl")
+            })
         meal_plan[day_key] = meals
 
+    # Save to DB
     meal_plan_doc = {
-        "user_id": user["_id"],  # keep as ObjectId in DB
+        "user_id": user["_id"],
         "name": user["name"],
         "daily_calories": daily_calories,
         "macros": macros,
