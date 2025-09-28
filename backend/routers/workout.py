@@ -1,18 +1,16 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Dict, List
-import random
 from database import db
 from bson import ObjectId
+import random
+from typing import List, Dict
 
 router = APIRouter(prefix="/workout", tags=["Workout"])
 
 class WorkoutRequest(BaseModel):
     user_id: str
-    level: str  # beginner / intermediate / expert
 
+# Pools of exercises
 exercise_pool = {
     "chest": ["Push-ups", "Bench Press", "Incline Bench Press", "Chest Fly", "Cable Crossovers", "Dumbbell Pullover"],
     "back": ["Pull-ups", "Lat Pulldown", "Bent-over Rows", "Seated Cable Row", "T-bar Row", "Superman"],
@@ -23,6 +21,9 @@ exercise_pool = {
     "cardio": ["Jump Rope", "Burpees", "Running", "Cycling", "High Knees", "Jumping Jacks"]
 }
 
+# ------------------------
+# Helpers
+# ------------------------
 async def get_user(user_id: str):
     user = await db.users.find_one({"_id": ObjectId(user_id)})
     if not user:
@@ -41,9 +42,8 @@ def select_exercises(body_part: str, count: int = 3) -> List[str]:
             detailed.append(f"{ex} – 3 sets × 10–12 reps")
     return detailed
 
-def generate_plan(level: str) -> Dict[str, List[str]]:
-    level = level.lower()
-    if level == "beginner":
+def generate_weekly_plan(plan_type: str) -> Dict[str, List[str]]:
+    if plan_type == "starter":
         return {
             "Monday": select_exercises("chest"),
             "Tuesday": select_exercises("back"),
@@ -53,7 +53,7 @@ def generate_plan(level: str) -> Dict[str, List[str]]:
             "Saturday": ["Rest"],
             "Sunday": ["Optional light cardio: " + ", ".join(select_exercises("cardio", 1))]
         }
-    elif level == "intermediate":
+    else:
         return {
             "Monday": select_exercises("chest"),
             "Tuesday": select_exercises("back"),
@@ -63,17 +63,10 @@ def generate_plan(level: str) -> Dict[str, List[str]]:
             "Saturday": ["Rest / Active recovery (stretching, yoga, foam rolling)"],
             "Sunday": ["Optional full-body cardio: " + ", ".join(select_exercises("cardio", 1))]
         }
-    else:  # expert
-        return {
-            "Monday": select_exercises("chest", 4) + select_exercises("arms", 2),
-            "Tuesday": select_exercises("back", 4) + select_exercises("shoulders", 2),
-            "Wednesday": select_exercises("legs", 4),
-            "Thursday": select_exercises("abs", 3) + select_exercises("cardio", 2),
-            "Friday": select_exercises("chest", 3) + select_exercises("arms", 3),
-            "Saturday": ["Active recovery: yoga, stretching, light cardio"],
-            "Sunday": ["Optional full-body cardio or mobility work"]
-        }
 
+# ------------------------
+# Endpoint
+# ------------------------
 @router.post("/plans")
 async def generate_plans(request: WorkoutRequest):
     user = await get_user(request.user_id)
@@ -82,27 +75,21 @@ async def generate_plans(request: WorkoutRequest):
     weight_kg = user["weight_lb"] * 0.453592
     bmi = round(weight_kg / (height_m ** 2), 1)
 
-    plan = generate_plan(request.level)
-
-    # Save to DB
-    await db.workoutPlans.update_one(
-        {"user_id": user["_id"]},
-        {"$set": {
-            "user_id": user["_id"],
-            "name": user["name"],
-            "level": request.level,
-            "bmi": bmi,
-            "goal": user["goal"],
-            "plan": plan
-        }},
-        upsert=True
-    )
-
-    return {
-        "user_id": str(user["_id"]),
+    plan_doc = {
+        "user_id": user["_id"],  # keep ObjectId in DB
         "name": user["name"],
         "bmi": bmi,
         "goal": user["goal"],
-        "level": request.level,
-        "plan": plan
+        "starter_plan": generate_weekly_plan("starter"),
+        "experienced_plan": generate_weekly_plan("experienced")
     }
+
+    await db.workoutPlans.update_one(
+        {"user_id": user["_id"]},
+        {"$set": plan_doc},
+        upsert=True
+    )
+
+    # Convert ObjectId to string for response
+    plan_doc["user_id"] = str(plan_doc["user_id"])
+    return plan_doc

@@ -9,6 +9,7 @@ app.include_router(workout.router)
 app.include_router(meal.router)
 app.include_router(quotes.router)
 
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Fitness AI backend"}

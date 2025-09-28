@@ -1,10 +1,12 @@
+# routers/chat.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import torch
+import requests
 from database import db
 from bson import ObjectId
-import requests, re
+import re
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -35,6 +37,9 @@ exercise_keywords = [
     "plank", "bicep curl", "tricep dip", "shoulder press", "leg press"
 ]
 
+# ------------------------
+# Helpers
+# ------------------------
 async def get_user(user_id: str):
     user = await db.users.find_one({"_id": ObjectId(user_id)})
     if not user:
@@ -42,25 +47,29 @@ async def get_user(user_id: str):
     return user
 
 def get_exercise_info(exercise_name: str) -> str:
+    """Fetch exercise instructions from Wger API"""
     url = f"https://wger.de/api/v2/exercise/?language=2&search={exercise_name}"
     try:
         response = requests.get(url, timeout=5)
         if response.status_code != 200:
             return "No detailed instructions available."
         data = response.json()
-        results = data.get("results")
+        results = data.get("results", [])
         if not results:
             return "No detailed instructions available."
-        desc = results[0].get("description", "")
-        desc = re.sub(r"<.*?>", "", desc)
+        desc = re.sub(r"<.*?>", "", results[0].get("description", ""))
         return desc.strip() or "No detailed instructions available."
     except Exception:
         return "No detailed instructions available."
 
+# ------------------------
+# Endpoint
+# ------------------------
 @router.post("/send")
 async def send_message(request: ChatRequest):
     user = await get_user(request.user_id)
 
+    # Detect if user asks about a specific exercise
     exercise_in_question = next(
         (word for word in exercise_keywords if word.lower() in request.message.lower()), None
     )
@@ -89,6 +98,8 @@ Assistant:
 """
 
     result = chat_pipeline(prompt)[0]["generated_text"]
+
+    # truncate if model repeats prompt
     for stop_word in ["User question:", "Assistant:"]:
         if stop_word in result:
             result = result.split(stop_word)[0].strip()
